@@ -1,0 +1,190 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>APK TO LITE</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:#eef4ff;font-family:Arial,sans-serif;padding:20px}
+main{max-width:850px;margin:auto}
+header,.card{background:#172235;border:1px solid #30405a;border-radius:15px;padding:18px;margin-bottom:15px}
+h1{margin:0;color:#75a0ff}
+h2{font-size:18px}
+p{font-size:13px;color:#aab9d1;line-height:1.6}
+input,button{width:100%;padding:12px;border-radius:9px;margin-top:10px}
+input{background:#101a2b;color:white;border:1px dashed #6284c4}
+button{background:#2864e8;color:white;border:0;font-weight:bold;cursor:pointer}
+button:disabled{opacity:.4}
+.secondary{background:#293951}
+.result{background:#101a2b;border-radius:10px;padding:13px;margin-top:12px;overflow-wrap:anywhere;font-size:13px;line-height:1.7}
+.stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.stat{background:#101a2b;padding:12px;border-radius:9px;overflow-wrap:anywhere}
+.stat b{display:block;font-size:20px}
+small{color:#aab9d1}
+table{width:100%;border-collapse:collapse;font-size:12px}
+td,th{text-align:left;padding:9px;border-bottom:1px solid #30405a;overflow-wrap:anywhere}
+.tablewrap{overflow:auto}
+.good{border:1px solid #239b7a}
+.bad{border:1px solid #c45d5d}
+@media(max-width:500px){body{padding:10px}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.stat{padding:8px}.stat b{font-size:16px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>APK TO LITE</h1>
+<p>Analisis struktur APK secara lokal. File tidak diunggah ke server.</p>
+</header>
+
+<section class="card">
+<h2>01 / Pilih APK</h2>
+<input id="apk" type="file" accept=".apk,application/octet-stream">
+<p id="fileinfo">Belum ada file dipilih.</p>
+<button id="analyze" disabled>ANALISIS APK</button>
+<button id="reset" class="secondary">RESET</button>
+<div id="status" class="result">Menunggu file APK.</div>
+</section>
+
+<section class="card">
+<h2>02 / Ringkasan</h2>
+<div class="stats">
+<div class="stat"><b id="size">—</b><small>Ukuran APK</small></div>
+<div class="stat"><b id="entries">—</b><small>Entri ZIP</small></div>
+<div class="stat"><b id="dex">—</b><small>File DEX</small></div>
+</div>
+<div id="summary" class="result">Hasil belum tersedia.</div>
+<button id="report" disabled>UNDUH LAPORAN TXT</button>
+</section>
+
+<section class="card">
+<h2>03 / Kandidat Optimasi</h2>
+<div id="findings" class="result">Belum ada data.</div>
+<div class="tablewrap">
+<table>
+<thead><tr><th>Nama file</th><th>Jenis</th><th>Ukuran</th></tr></thead>
+<tbody id="rows"><tr><td colspan="3">Belum dianalisis.</td></tr></tbody>
+</table>
+</div>
+</section>
+
+<section class="card">
+<h2>Batasan teknis</h2>
+<p>Tool ini membaca daftar isi APK ZIP. Tool tidak mengukur RAM saat aplikasi berjalan dan tidak menghasilkan APK Lite. Untuk mengurangi RAM secara nyata, developer perlu memeriksa kode, aset, dan penggunaan memori aplikasi, kemudian membangun serta menandatangani ulang APK.</p>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+let file=null,reportText='';
+
+function fmt(n){
+ const units=['B','KB','MB','GB'];let i=0;
+ while(n>=1024&&i<3){n/=1024;i++}
+ return (i?n.toFixed(2):Math.round(n))+' '+units[i];
+}
+function esc(s){
+ return String(s).replace(/[&<>"']/g,c=>({
+ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+ })[c]);
+}
+function status(msg,kind=''){
+ $('status').className='result '+kind;
+ $('status').innerHTML=msg;
+}
+function classify(n){
+ if(/^classes\d*\.dex$/i.test(n))return 'Kode DEX';
+ if(n.startsWith('lib/')&&/\.so$/i.test(n))return 'Library native';
+ if(/(^|\/)res\/.*\.(png|webp|jpg|jpeg|gif|avif)$/i.test(n))return 'Gambar';
+ if(n.startsWith('assets/'))return 'Aset';
+ if(/AndroidManifest\.xml$/i.test(n))return 'Manifest';
+ if(/\.arsc$/i.test(n))return 'Resource';
+ return 'Lainnya';
+}
+$('apk').addEventListener('change',()=>{
+ file=$('apk').files[0]||null;
+ $('fileinfo').textContent=file?file.name+' · '+fmt(file.size):'Belum ada file dipilih.';
+ $('analyze').disabled=!file;
+ $('report').disabled=true;
+ if(file)status('File siap diperiksa.');
+});
+$('reset').onclick=()=>{
+ file=null;reportText='';$('apk').value='';
+ $('fileinfo').textContent='Belum ada file dipilih.';
+ $('analyze').disabled=true;$('report').disabled=true;
+ $('size').textContent=$('entries').textContent=$('dex').textContent='—';
+ $('summary').textContent='Hasil belum tersedia.';
+ $('findings').textContent='Belum ada data.';
+ $('rows').innerHTML='<tr><td colspan="3">Belum dianalisis.</td></tr>';
+ status('Menunggu file APK.');
+};
+async function readZip(buf){
+ const v=new DataView(buf);let end=-1;
+ for(let p=buf.byteLength-22;p>=Math.max(0,buf.byteLength-65557);p--){
+  if(v.getUint32(p,true)===0x06054b50){end=p;break}
+ }
+ if(end<0)throw Error('Direktori ZIP tidak ditemukan. File rusak atau memakai format ZIP yang belum didukung.');
+ const count=v.getUint16(end+10,true);
+ const centralSize=v.getUint32(end+12,true);
+ let p=v.getUint32(end+16,true);
+ if(count===0xffff||p===0xffffffff||centralSize===0xffffffff)
+  throw Error('Format ZIP64 belum didukung.');
+ if(p+centralSize>buf.byteLength)throw Error('Direktori ZIP tidak valid.');
+ const entries=[];
+ for(let i=0;i<count;i++){
+  if(p+46>buf.byteLength||v.getUint32(p,true)!==0x02014b50)
+   throw Error('Entri ZIP rusak pada urutan '+i+'.');
+  const csize=v.getUint32(p+20,true);
+  const usize=v.getUint32(p+24,true);
+  const nl=v.getUint16(p+28,true);
+  const el=v.getUint16(p+30,true);
+  const cl=v.getUint16(p+32,true);
+  if(p+46+nl+el+cl>buf.byteLength)throw Error('Metadata ZIP terpotong.');
+  const name=new TextDecoder().decode(new Uint8Array(buf,p+46,nl));
+  entries.push({name,csize,usize});
+  p+=46+nl+el+cl;
+ }
+ return entries;
+}
+$('analyze').onclick=async()=>{
+ if(!file)return;
+ $('analyze').disabled=true;
+ status('Sedang membaca struktur APK...');
+ try{
+  if(file.size<22)throw Error('File terlalu kecil.');
+  const entries=await readZip(await file.arrayBuffer());
+  const dex=entries.filter(x=>/^classes\d*\.dex$/i.test(x.name));
+  const libs=entries.filter(x=>x.name.startsWith('lib/')&&/\.so$/i.test(x.name));
+  const imgs=entries.filter(x=>classify(x.name)==='Gambar');
+  const assets=entries.filter(x=>x.name.startsWith('assets/'));
+  const largest=[...entries].sort((a,b)=>b.usize-a.usize).slice(0,12);
+  const suggestions=[];
+  if(dex.length>1)suggestions.push('Ada '+dex.length+' file DEX. Periksa dependency dan kode yang tidak terpakai.');
+  if(libs.length)suggestions.push('Ada '+libs.length+' library native. Periksa ABI yang diperlukan melalui build resmi.');
+  const bigImages=imgs.filter(x=>x.usize>300*1024).length;
+  const bigAssets=assets.filter(x=>x.usize>1024*1024).length;
+  if(bigImages)suggestions.push(bigImages+' gambar berukuran lebih dari 300 KB bisa diperiksa untuk optimasi.');
+  if(bigAssets)suggestions.push(bigAssets+' aset berukuran lebih dari 1 MB perlu ditinjau.');
+  if(!suggestions.length)suggestions.push('Tidak ditemukan kandidat sederhana. Ukur RAM aplikasi saat berjalan dengan profiler Android.');
+  $('size').textContent=fmt(file.size);
+  $('entries').textContent=entries.length;
+  $('dex').textContent=dex.length;
+  $('summary').innerHTML='Analisis selesai.<br>DEX: '+dex.length+' · Library: '+libs.length+' · Gambar: '+imgs.length+' · Aset: '+assets.length+'<br><small>Ini bukan ukuran RAM.</small>';
+  $('findings').innerHTML=suggestions.map(esc).join('<br>• ');
+  $('rows').innerHTML=largest.map(x=>'<tr><td>'+esc(x.name)+'</td><td>'+classify(x.name)+'</td><td>'+fmt(x.usize)+'</td></tr>').join('');
+  reportText='APK TO LITE - LAPORAN\nFile: '+file.name+'\nUkuran: '+fmt(file.size)+'\nEntri: '+entries.length+'\nDEX: '+dex.length+'\nLibrary native: '+libs.length+'\nGambar: '+imgs.length+'\nAset: '+assets.length+'\n\nSaran:\n- '+suggestions.join('\n- ')+'\n\nFile terbesar:\n'+largest.map(x=>x.name+' | '+fmt(x.usize)).join('\n')+'\n\nAPK tidak diubah. Ini bukan pengukuran RAM.';
+  $('report').disabled=false;
+  status('Berhasil membaca '+entries.length+' entri ZIP. APK asli tidak diubah.','good');
+ }catch(e){status('Analisis gagal: '+esc(e.message),'bad')}
+ finally{$('analyze').disabled=!file}
+};
+$('report').onclick=()=>{
+ if(!reportText)return;
+ const url=URL.createObjectURL(new Blob([reportText],{type:'text/plain;charset=utf-8'}));
+ const a=document.createElement('a');a.href=url;a.download='apk-to-lite-report.txt';a.click();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+};
+</script>
+</body>
+</html>
